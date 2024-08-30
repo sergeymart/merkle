@@ -1,0 +1,62 @@
+#include "imports/stdlib.fc";
+
+const error::bad_data = 1111;
+const error::bad_proof = 2222;
+
+(int) verify(int current, int root, cell proof) inline {
+    slice ds = proof.begin_parse();
+
+    while (ds.slice_bits() > 0) {
+        throw_if(error::bad_data, ds.slice_bits() % 257);
+
+        int right = ds~load_uint(1);
+        int hash = ds~load_uint(256);
+
+        builder tmp = begin_cell();
+        if (right) {
+            tmp~store_uint(current, 256);
+            tmp~store_uint(hash, 256);
+        } else {
+            tmp~store_uint(hash, 256);
+            tmp~store_uint(current, 256);
+        }
+        current = tmp.end_cell().cell_hash();
+
+        if (current == root) {
+            return true;
+        }
+
+        if (ds.slice_bits() == 0) {
+            if (ds.slice_refs() > 0) {
+                ds = ds.preload_ref().begin_parse();
+            } else {
+                return false;
+            }
+        }
+    }
+    return false;
+}
+
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    throw_if(0, in_msg_body.slice_empty?());
+
+    slice storage = get_data().begin_parse();
+    int root = storage~load_uint(256);
+
+    cell item = in_msg_body~load_ref();
+    cell proof = in_msg_body~load_ref();
+
+    int target = item.cell_hash();
+
+    int proofVerified = verify(target, root, proof);
+    throw_unless(error::bad_proof, proofVerified);
+
+    slice ds = item.begin_parse();
+    slice address = ds~load_msg_addr();
+    int amount = ds~load_coins();
+
+    ;; mint_tokens(address, amount);
+
+    throw(666);
+}
