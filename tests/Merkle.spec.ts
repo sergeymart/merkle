@@ -1,4 +1,4 @@
-import { Blockchain, SandboxContract, TreasuryContract } from '@ton/sandbox'
+import { Blockchain, printTransactionFees, SandboxContract, TreasuryContract } from '@ton/sandbox'
 import { Address, beginCell, Builder, Cell, toNano } from '@ton/core'
 import { CheckParams, Merkle } from '../wrappers/Merkle'
 import '@ton/test-utils'
@@ -9,12 +9,13 @@ import * as fs from 'node:fs'
 
 jest.setTimeout(1000000)
 
-type Leaf = { address: string, amount: string, hash: string }
+type Proof = Array<{ position: 'right' | 'left', data: Buffer }>
+type Leaf = { address: string, amount: string, hash: string, proof?: Proof }
 
 const cellHash = (data: Buffer) => beginCell().storeBuffer(data).endCell().hash()
 const filename = 'data.json'
 
-const packProof = (items: Array<{ position: 'right' | 'left', data: Buffer }>) => {
+const packProof = (items: Proof) => {
   let curRoot = beginCell()
   const refsList: Builder[] = []
 
@@ -30,7 +31,6 @@ const packProof = (items: Array<{ position: 'right' | 'left', data: Buffer }>) =
       curRoot = beginCell()
     }
   }
-  refsList.push()
   const root = [...refsList, curRoot].reduceRight((child, parent) => parent.storeRef(child))
   return root.endCell()
 }
@@ -39,7 +39,7 @@ describe('Merkle', () => {
   let code: Cell
   let leaves: Array<Leaf> = []
   let tree: MerkleTree
-  let checkNum = 100
+  let checkNum = 1000
 
   beforeAll(async () => {
     code = await compile('Merkle')
@@ -73,10 +73,16 @@ describe('Merkle', () => {
     console.timeEnd('Generate data')
 
     console.time('Merkle tree')
-    tree = new MerkleTree(leaves.map(l => l.hash), (data: Buffer) => cellHash(data))
+    tree = new MerkleTree(leaves.map(l => l.hash), cellHash)
     console.timeEnd('Merkle tree')
 
-    checkNum = leaves.length < 100 ? leaves.length : 100
+    console.time('Proofs')
+    leaves = leaves.map(((l, idx) => {
+      const proof = tree.getProof(l.hash, idx)
+      return { ...l, proof }
+    }))
+    console.timeEnd('Proofs')
+
   })
 
   let blockchain: Blockchain
@@ -119,11 +125,9 @@ describe('Merkle', () => {
       const idx = Math.floor(Math.random() * leaves.length)
 
       const item = leaves[idx]
-      const proof = packProof(tree.getProof(item.hash))
-
       const params: CheckParams = {
         entity: beginCell().storeAddress(Address.parse(item.address)).storeCoins(BigInt(item.amount)).endCell(),
-        proof: proof,
+        proof: packProof(leaves[idx].proof!),
       }
 
       const res = await merkle.sendCheck(deployer.getSender(), toNano(1), params)
